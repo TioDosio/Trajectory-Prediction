@@ -10,23 +10,23 @@ class WalkingDirectionKF:
         # State vector: [x, y, vx, vy, heading, angular_vel]
         self.state = np.zeros(6)
         
-        # State covariance matrix
+        # State covariance matrix (P_init_scale: [0.05, 0.3, 0.2])
         self.P = np.eye(6)
         self.P[0:2, 0:2] *= 0.05  # position uncertainty
         self.P[2:4, 2:4] *= 0.3  # velocity uncertainty
         self.P[4:6, 4:6] *= 0.2  # orientation uncertainty
         
-        # Process noise covariance
+        # Process noise covariance (Q_scale: [0.001, 0.01, 0.01])
         self.Q = np.eye(6)
-        self.Q[0:2, 0:2] *= 0.005  # position process noise
-        self.Q[2:4, 2:4] *= 0.05   # velocity process noise
-        self.Q[4:6, 4:6] *= 0.03  # orientation process noise
+        self.Q[0:2, 0:2] *= 0.001  # position process noise
+        self.Q[2:4, 2:4] *= 0.01   # velocity process noise
+        self.Q[4:6, 4:6] *= 0.01  # orientation process noise
         
-        # Measurement noise covariance
+        # Measurement noise covariance (R_scale: [0.5, 0.01, 0.5])
         self.R = np.eye(6)
-        self.R[0:2, 0:2] *= 0.2   # position measurement noise
-        self.R[2:4, 2:4] *= 0.3   # velocity measurement noise
-        self.R[4:6, 4:6] *= 0.1   # orientation measurement noise
+        self.R[0:2, 0:2] *= 0.5   # position measurement noise
+        self.R[2:4, 2:4] *= 0.01   # velocity measurement noise
+        self.R[4:6, 4:6] *= 0.5   # orientation measurement noise
         
         # State transition matrix
         self.dt = 0.1  # time step
@@ -76,6 +76,11 @@ class HumanTracker:
         self.motion_state = "unknown"  # Can be "standing", "walking", "running"
         self.velocity_history = []
         self.velocity_window = 10  # frames
+
+        # Store initial Q for adaptive scaling (using the optimized Q values)
+        self.initial_Q_pos = 0.001
+        self.initial_Q_vel = 0.01
+        self.initial_Q_ori = 0.01
     
     def update(self, body_pose, head_pose):
         current_time = rospy.Time.now()
@@ -100,7 +105,7 @@ class HumanTracker:
         ])
         
         # Calculate velocity if we have a state
-        if np.any(self.kf.state[0:2] != 0):
+        if np.any(self.kf.state[0:2] != 0) and dt > 0:
             vx = (pos_x - self.kf.state[0]) / dt
             vy = (pos_y - self.kf.state[1]) / dt
         else:
@@ -108,7 +113,7 @@ class HumanTracker:
             vy = 0
         
         # Calculate angular velocity
-        if self.kf.state[4] != 0:
+        if self.kf.state[4] != 0 and dt > 0:
             angular_vel = (yaw - self.kf.state[4]) / dt
         else:
             angular_vel = 0
@@ -125,23 +130,24 @@ class HumanTracker:
         self.velocity_history.append((vx, vy))
 
         print("Current velocity history:", self.velocity_history)
-        # Classify motion state
+        # Classify motion state and adapt Q
         if len(self.velocity_history) >= 5:
             avg_speed = np.mean([np.sqrt(v[0]**2 + v[1]**2) for v in self.velocity_history])
             if avg_speed < 0.2:
                 self.motion_state = "standing"
-                # Use lower process noise for position and velocity
-                self.kf.Q[0:2, 0:2] *= 0.5  # Less position uncertainty
-                self.kf.Q[2:4, 2:4] *= 0.2  # Much less velocity uncertainty
+                self.kf.Q[0:2, 0:2] = np.eye(2) * self.initial_Q_pos * 0.1  # Reduced position noise
+                self.kf.Q[2:4, 2:4] = np.eye(2) * self.initial_Q_vel * 0.05 # Reduced velocity noise
+                self.kf.Q[4:6, 4:6] = np.eye(2) * self.initial_Q_ori * 0.1 # Reduced orientation noise
             elif avg_speed < 1.2:
                 self.motion_state = "walking"
-                # Use normal process noise
-                self.kf.Q[0:2, 0:2] = np.eye(2) * 0.01
-                self.kf.Q[2:4, 2:4] = np.eye(2) * 0.1
+                self.kf.Q[0:2, 0:2] = np.eye(2) * self.initial_Q_pos
+                self.kf.Q[2:4, 2:4] = np.eye(2) * self.initial_Q_vel
+                self.kf.Q[4:6, 4:6] = np.eye(2) * self.initial_Q_ori
             else:
                 self.motion_state = "running"
-                # Use higher process noise for velocity
-                self.kf.Q[2:4, 2:4] *= 1.5  # More velocity uncertainty
+                self.kf.Q[0:2, 0:2] = np.eye(2) * self.initial_Q_pos * 2.0 # Increased position noise
+                self.kf.Q[2:4, 2:4] = np.eye(2) * self.initial_Q_vel * 3.0  # Increased velocity noise
+                self.kf.Q[4:6, 4:6] = np.eye(2) * self.initial_Q_ori * 2.0 # Increased orientation noise
         
         # Update time
         self.last_update_time = current_time
@@ -165,24 +171,24 @@ class HumanTracker:
 
 class HumanTrackingNode:
     def __init__(self):
-        rospy.init_node('human_tracking_node')
+        rospy.init_node("human_tracking_node")
         
         # Initialize human trackers dictionary
         self.trackers = {}
         self.next_id = 0
         
         # Parameters
-        self.max_association_distance = rospy.get_param('~max_association_distance', 1.0)  # meters
-        self.prediction_steps = rospy.get_param('~prediction_steps', 5)
-        self.prediction_dt = rospy.get_param('~prediction_dt', 1)  # seconds
+        self.max_association_distance = rospy.get_param("~max_association_distance", 1.0)  # meters
+        self.prediction_steps = rospy.get_param("~prediction_steps", 5)
+        self.prediction_dt = rospy.get_param("~prediction_dt", 1)  # seconds
         
         # Publishers
-        self.trajectory_pub = rospy.Publisher('/predicted_trajectories', MarkerArray, queue_size=10)
-        self.direction_pub = rospy.Publisher('/predicted_walking_direction', Vector3, queue_size=10)
+        self.trajectory_pub = rospy.Publisher("/predicted_trajectories", MarkerArray, queue_size=10)
+        self.direction_pub = rospy.Publisher("/predicted_walking_direction", Vector3, queue_size=10)
         
         # Subscribers using message filters for synchronization
-        self.head_sub = message_filters.Subscriber('/raw_heads', PoseArray)
-        self.body_sub = message_filters.Subscriber('/raw_bodies', PoseArray)
+        self.head_sub = message_filters.Subscriber("/raw_heads", PoseArray)
+        self.body_sub = message_filters.Subscriber("/raw_bodies", PoseArray)
         
         # Synchronize messages
         self.ts = message_filters.ApproximateTimeSynchronizer(
@@ -198,16 +204,16 @@ class HumanTrackingNode:
         for i in range(len(body_poses_msg.poses)):
             body_pose = body_poses_msg.poses[i]
             head_pose = head_poses_msg.poses[i]
-            print("Processing body pose:", body_pose, "and head pose:", head_pose)
+            # print("Processing body pose:", body_pose, "and head pose:", head_pose) # Commented out for cleaner output
             # Find closest tracker
-            min_dist = float('inf')
+            min_dist = float("inf")
             best_tracker_id = None
             
             for tracker_id, tracker in self.trackers.items():
                 if not tracker.active:
                     continue
                 
-                dist = np.sqrt((body_pose.position.x - tracker.kf.state[0])**2 + 
+                dist = np.sqrt((body_pose.position.x - tracker.kf.state[0])**2 + \
                               (body_pose.position.y - tracker.kf.state[1])**2)
                 
                 if dist < min_dist and dist < self.max_association_distance:
@@ -322,7 +328,7 @@ class HumanTrackingNode:
             # Publish walking direction for the closest person to the robot
             # (this is a simple heuristic - you might want a more sophisticated approach)
             if len(self.trackers) > 0:
-                closest_dist = float('inf')
+                closest_dist = float("inf")
                 closest_state = None
                 
                 for tr in self.trackers.values():
@@ -344,7 +350,7 @@ class HumanTrackingNode:
         if len(marker_array.markers) > 0:
             self.trajectory_pub.publish(marker_array)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         node = HumanTrackingNode()
         rospy.spin()

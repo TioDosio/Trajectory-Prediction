@@ -70,7 +70,7 @@ class HumanTracker:
         self.active = True
         self.missed_frames = 0
         self.position_history = []
-        self.MAX_MISSED_FRAMES = 10
+        self.MAX_MISSED_FRAMES = 1000 # Very high tolerance for msissing frames
         
         # Add motion state classification
         self.motion_state = "unknown"  # Can be "standing", "walking", "running"
@@ -129,7 +129,6 @@ class HumanTracker:
             self.velocity_history.pop(0)
         self.velocity_history.append((vx, vy))
 
-        print("Current velocity history:", self.velocity_history)
         # Classify motion state and adapt Q
         if len(self.velocity_history) >= 5:
             avg_speed = np.mean([np.sqrt(v[0]**2 + v[1]**2) for v in self.velocity_history])
@@ -177,10 +176,10 @@ class HumanTrackingNode:
         self.trackers = {}
         self.next_id = 0
         
-        # Parameters
-        self.max_association_distance = rospy.get_param("~max_association_distance", 1.0)  # meters
-        self.prediction_steps = rospy.get_param("~prediction_steps", 5)
-        self.prediction_dt = rospy.get_param("~prediction_dt", 1)  # seconds
+        # Parameters (optimized for single person tracking)
+        self.max_association_distance = rospy.get_param("~max_association_distance", 100.0)  # Large distance for single person
+        self.prediction_steps = rospy.get_param("~prediction_steps", 5)  # Predict 5 steps ahead
+        self.prediction_dt = rospy.get_param("~prediction_dt", 1)  # 1 second per step
         
         # Publishers
         self.trajectory_pub = rospy.Publisher("/predicted_trajectories", MarkerArray, queue_size=10)
@@ -250,7 +249,7 @@ class HumanTrackingNode:
             
             # Create path marker for past positions
             past_marker = Marker()
-            past_marker.header.frame_id = "base_footprint"
+            past_marker.header.frame_id = "map"
             past_marker.header.stamp = rospy.Time.now()
             past_marker.ns = "past_trajectories"
             past_marker.id = tracker_id
@@ -274,7 +273,7 @@ class HumanTrackingNode:
             
             # Create future trajectory marker
             future_marker = Marker()
-            future_marker.header.frame_id = "base_footprint"
+            future_marker.header.frame_id = "map"
             future_marker.header.stamp = rospy.Time.now()
             future_marker.ns = "future_trajectories"
             future_marker.id = tracker_id

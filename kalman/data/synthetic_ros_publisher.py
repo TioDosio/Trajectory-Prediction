@@ -23,15 +23,17 @@ def generate_and_publish_trajectories():
     heading_gt = 0.0  # radians
     angular_vel_gt = 0.0
 
-    # Define a few trajectory segments
+    # Define a few trajectory segments (with right turn in the middle)
     trajectory_segments = [
-        (0.0, 0.0, 0.0, 10),  # Standing still
-        (0.5, 0.0, 0.0, 10),  # Walking straight
-        (0.5, 0.0, np.deg2rad(5), 10),  # Turning left while walking
-        (0.5, 0.0, 0.0, 10),  # Walking straight again
-        (0.5, 0.0, -np.deg2rad(5), 10),  # Turning right while walking
-        (1.0, 0.0, 0.0, 10),  # Accelerating forward
-        (0.0, 0.0, 0.0, 10),  # Decelerating to stop
+        (0.0, 0.0, 0.0, 8),   # Standing still
+        (0.3, 0.0, 0.0, 8),   # Walking straight forward
+        (0.3, 0.0, 0.0, 8),   # Continue walking straight
+        (0.3, 0.0, -np.deg2rad(10), 8),  # Turn RIGHT in the middle (negative angular velocity)
+        (0.3, 0.0, -np.deg2rad(10), 8),  # Continue turning right
+        (0.3, 0.0, 0.0, 8),   # Walking straight after turn
+        (0.3, 0.0, 0.0, 8),   # Continue walking straight
+        (0.6, 0.0, 0.0, 8),   # Accelerating forward
+        (0.0, 0.0, 0.0, 8),   # Decelerating to stop
     ]
 
     current_segment_idx = 0
@@ -53,8 +55,12 @@ def generate_and_publish_trajectories():
         angular_vel_gt = (1 - alpha) * angular_vel_gt + alpha * target_angular_vel
 
         # Update ground truth state
-        pos_x_gt += vel_x_gt * dt
-        pos_y_gt += vel_y_gt * dt
+        # Convert velocity from body frame to world frame based on current heading
+        world_vel_x = vel_x_gt * np.cos(heading_gt) - vel_y_gt * np.sin(heading_gt)
+        world_vel_y = vel_x_gt * np.sin(heading_gt) + vel_y_gt * np.cos(heading_gt)
+        
+        pos_x_gt += world_vel_x * dt
+        pos_y_gt += world_vel_y * dt
         heading_gt += angular_vel_gt * dt
 
         # Add noise to measurements
@@ -65,11 +71,11 @@ def generate_and_publish_trajectories():
         # Create PoseArray messages
         head_poses_msg = PoseArray()
         head_poses_msg.header.stamp = rospy.Time.now()
-        head_poses_msg.header.frame_id = "base_footprint"
+        head_poses_msg.header.frame_id = "map"
 
         body_poses_msg = PoseArray()
         body_poses_msg.header.stamp = rospy.Time.now()
-        body_poses_msg.header.frame_id = "base_footprint"
+        body_poses_msg.header.frame_id = "map"
 
         # Create a single Pose for the person
         body_pose = Pose()
@@ -89,7 +95,7 @@ def generate_and_publish_trajectories():
         head_pub.publish(head_poses_msg)
         body_pub.publish(body_poses_msg)
 
-        rospy.loginfo(f"Published data for time: {rospy.Time.now().to_sec():.2f}")
+        rospy.loginfo("Published data for time: {:.2f}".format(rospy.Time.now().to_sec()))
 
         segment_step_count += 1
         if segment_step_count >= segment_duration:

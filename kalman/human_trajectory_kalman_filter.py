@@ -3,7 +3,7 @@ import cv2
 from scipy.spatial.transform import Rotation
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
-import copy~
+import copy
 
 import rospy
 from human_awareness_msgs.msg import Person, PersonsList, BodyPart
